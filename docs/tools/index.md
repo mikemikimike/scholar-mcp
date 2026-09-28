@@ -50,7 +50,7 @@ Full-text search across the Semantic Scholar corpus.
 |---|---|---|---|
 | `query` | string | *(required)* | Search query string |
 | `fields` | string | `"compact"` | Field set: `compact`, `standard`, or `full` |
-| `limit` | int | `10` | Results per page (max 100) |
+| `limit` | int | `10` | Results per page (max 100; a larger value is capped at 100) |
 | `offset` | int | `0` | Pagination offset |
 | `year_start` | int | _(none)_ | Filter: earliest publication year |
 | `year_end` | int | _(none)_ | Filter: latest publication year |
@@ -114,7 +114,7 @@ Forward citations: papers that cite the given paper.
 |---|---|---|---|
 | `identifier` | string | *(required)* | Paper ID (DOI, S2 ID, etc.) |
 | `fields` | string | `"compact"` | Field set for citing papers |
-| `limit` | int | `20` | Max results (max 1000) |
+| `limit` | int | `20` | Max results (max 1000; a larger value is capped at 1000) |
 | `offset` | int | `0` | Pagination offset |
 | `year_start` | int | _(none)_ | Filter: earliest year |
 | `year_end` | int | _(none)_ | Filter: latest year |
@@ -133,7 +133,7 @@ Backward references: papers cited by the given paper.
 |---|---|---|---|
 | `identifier` | string | *(required)* | Paper ID (DOI, S2 ID, etc.) |
 | `fields` | string | `"compact"` | Field set for cited papers |
-| `limit` | int | `50` | Max results (max 1000) |
+| `limit` | int | `50` | Max results (max 1000; a larger value is capped at 1000) |
 | `offset` | int | `0` | Pagination offset |
 
 **Returns:** `{"data": [{"citedPaper": {...}}, ...]}`.
@@ -227,7 +227,7 @@ Paper recommendations based on positive (and optional negative) examples.
 |---|---|---|---|
 | `positive_ids` | list[string] | *(required)* | 1 to 5 S2 paper IDs as positive examples |
 | `negative_ids` | list[string] | _(none)_ | S2 paper IDs to steer recommendations away from |
-| `limit` | int | `10` | Number of recommendations |
+| `limit` | int | `10` | Number of recommendations (max 500; a larger value is capped at 500) |
 | `fields` | string | `"standard"` | Field set for returned papers |
 
 **Returns:** `{"recommendations": [...]}`, the recommended paper records.
@@ -641,7 +641,7 @@ Normalise a messy citation string to its canonical form and body.
 | `raw` | string |, | Messy citation string (such as `"rfc9000"`, `"nist 800-53"`) |
 
 !!! warning "A null record is not always an absence"
-    A `warning` beside a null `record` means the source never answered, so the standard may well exist and the canonical form is still usable. A null `record` with no `warning` means the sources looked and found nothing.
+    A `warning` beside a null `record` means the source gave no usable answer, so the standard may well exist and the canonical form is still usable. A null `record` with no `warning` means the sources looked and found nothing.
 
 ---
 
@@ -656,7 +656,7 @@ Search standards by identifier, title, or free text.
 | `limit` | integer | 10 | Max results (max 50) |
 
 !!! warning "Every answer states its own completeness"
-    `partial` is always present. When it is true, `failed_bodies` names each source that did not answer, and `warning` explains what went wrong.
+    `partial` is always present. When it is true, `failed_bodies` names each source that gave no usable answer. `warning` gives each one's HTTP status and what went wrong, such as `ETSI (HTTP 200: answered with a non-JSON body, content-type: text/html)`: a 200 alone would read as success.
 
     This is not an `error`. A caller matching on `error` would discard the records that other sources returned.
 
@@ -675,6 +675,8 @@ full text via docling.
 | `fetch_full_text` | boolean | false | Fetch and convert full text via docling |
 | `text_offset` | integer | 0 | Character offset at which the full-text page starts |
 | `max_chars` | integer or null | 20000 | Page size, capped at 20,000; use `null` only when the client can accept the complete text |
+
+`full_text` appears only when `fetch_full_text=true`. The converted text is cached, so a later request for it is not converted again, but a call without the flag returns the metadata record alone, whoever fetched the text before.
 
 With `fetch_full_text=true`, a conversion that fails still returns the record, with the reason in `full_text_error`. Absent both `full_text` and `full_text_error`, no full text was on offer or docling is not configured; neither is worth retrying.
 
