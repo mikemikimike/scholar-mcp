@@ -2,6 +2,47 @@
 
 Newest first. One entry per research pass.
 
+## 2026-09-28
+
+### Semantic Scholar author pages
+
+Updated [Semantic Scholar API behaviour](semantic-scholar-api.md) for #490.
+Three unkeyed requests to `/author/1695689` with different `limit` and
+`offset` values returned the same 461 papers in the same order, confirming
+the endpoint ignores both; the spec documents neither. The same response
+reported `paperCount` 472, so the embedded list is not always complete.
+
+### DOIs in citation text
+
+Added [DOIs in free-text citations](doi-in-citation-text.md) for #482, where
+no NPL reference on DE102025108780A1 was resolved because the extractor
+required `doi:`. Sourced Crossref's recommended DOI pattern and the two EPO
+forms recorded in the issue (`https://doi.org/…`, `DOI 10.…`). The DOI
+Handbook's syntax pages render only through JavaScript and were not read;
+early non-Crossref-shaped DOIs, percent-encoded DOIs and DOIs broken across
+lines remain unverified.
+
+### OpenAlex work objects
+
+Added [OpenAlex work objects](openalex-works.md) for #478, where
+`batch_resolve`'s DOI fallback returned the raw 15 KB work. Read the
+work-object docs at openalex-docs 8cec9db and one live record
+(10.1038/nature14539). The docs type `ids.mag` as an integer; the record
+served a string. `referenced_works_count` is served but undocumented. The live
+record's `oa_url` was a landing page with no `pdf_url`, which is why the
+mapped `openAccessPdf` reads `pdf_url` only.
+
+### Relaton titles
+
+Added [Relaton bibitem titles](relaton-titles.md) for #480, where synced ISO
+records carried only their `title-intro`. Read the relaton-iso README, which
+shows `main` as the composed title beside its typed parts, and ten records
+across relaton-data-iso, -iec and -ieee, pinned to the commits read. IEC
+amendments have the same shape and were affected too; the IEEE records carry
+`main` only. `language` is a list, a string or null depending on the
+repository. Whether every record has a `main`, and whether English always
+comes first (which the abstract lookup also relies on), remain unverified.
+
 ## 2026-09-25
 
 ### PDF download header

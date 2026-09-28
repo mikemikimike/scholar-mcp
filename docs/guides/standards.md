@@ -6,6 +6,11 @@ is the community-maintained Relaton YAML dumps at
 [`relaton/relaton-data-iec`](https://github.com/relaton/relaton-data-iec), and
 [`relaton/relaton-data-ieee`](https://github.com/relaton/relaton-data-ieee).
 
+Only a sync replaces a synced record. A lookup through `get_standard` or
+`resolve_standard_identifier` caches what it fetched, but never over a synced
+record, so a synced standard stays in `search_standards` and never expires
+between syncs.
+
 ## Running a sync
 
 ```
@@ -17,6 +22,16 @@ scholar-mcp sync-standards --force    # re-sync even if upstream SHA is unchange
 
 Exit codes: `0` on success (or no-op), `1` on hard failure, `3` on partial failure
 (some bodies succeeded, some did not).
+
+!!! note "After upgrading to a release that corrects synced records"
+    A fix to how records are read from the Relaton dumps only reaches the local
+    copy on the next sync. Such a release forgets the upstream commit recorded
+    for ISO, IEC, and IEEE when the server first opens its cache, so the next
+    `sync-standards` run rewrites every record even if upstream has not
+    changed. Until that run,
+    the records keep what the earlier release stored. Release 3.0 needs this
+    once: ISO and IEC titles synced before it carry only the first part of the
+    title.
 
 ## Running a sync from Docker
 

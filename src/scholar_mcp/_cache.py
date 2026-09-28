@@ -373,6 +373,35 @@ _REPAIRS: dict[str, str] = {
         "UPDATE standards SET data = json_remove(data, '$.full_text') "
         "WHERE json_extract(data, '$.full_text') IS NOT NULL"
     ),
+    # #480: Relaton records took their title from the first entry of the
+    # title list, the series-wide title-intro, so ISO/IEC 27001 and 27002
+    # shared one title. Synced rows are rewritten by the next sync-standards
+    # run; clearing the stored commit makes that run reparse even when the
+    # upstream repository has not moved since.
+    "480_resync_relaton_bodies": (
+        "UPDATE standards_sync_runs SET upstream_ref = NULL "
+        "WHERE body IN ('ISO', 'IEC', 'IEEE')"
+    ),
+    # Live-fetched Relaton rows carry the same short title and no sync
+    # rewrites them, so they go for one refetch each. Synced rows stay until
+    # the resync replaces them.
+    "480_live_relaton_rows": (
+        "DELETE FROM standards WHERE synced_at IS NULL "
+        "AND json_extract(data, '$.body') IN "
+        "('ISO', 'IEC', 'IEEE', 'ISO/IEC', 'IEC/IEEE', 'ISO/IEC/IEEE')"
+    ),
+    # Cached search results hold the short titles too, and nothing in a
+    # cached list says which body each record came from.
+    "480_standards_search_results": "DELETE FROM standards_search",
+    # #496: resolve_standard_identifier rewrote a synced row as a live one.
+    # The same statement as 479_resync_cc_rows, registered again because a
+    # database that already ran that repair can have been unsynced since.
+    # Relaton rows need nothing here: the next sync rewrites them as synced,
+    # while CC's Protection Profile phase skips an unchanged upstream file.
+    "496_resync_cc_rows": (
+        "UPDATE standards SET source = 'CC', synced_at = cached_at "
+        "WHERE synced_at IS NULL AND json_extract(data, '$.body') = 'CC'"
+    ),
 }
 
 
@@ -419,6 +448,18 @@ async def _apply_migrations(db: aiosqlite.Connection) -> None:
     await _apply_repairs(db)
     await db.commit()
 
+
+# Upsert for a standards row. A live write (synced_at NULL) never replaces a
+# synced row: sync owns it, and a live copy would drop it from synced search
+# and put it under the TTL (#496). A sync write replaces anything.
+_WRITE_STANDARD = (
+    "INSERT INTO standards (identifier, data, cached_at, source, synced_at) "
+    "VALUES (?, ?, ?, ?, ?) "
+    "ON CONFLICT(identifier) DO UPDATE SET data = excluded.data, "
+    "cached_at = excluded.cached_at, source = excluded.source, "
+    "synced_at = excluded.synced_at "
+    "WHERE excluded.synced_at IS NOT NULL OR standards.synced_at IS NULL"
+)
 
 _TTL_TABLES = (
     "papers",
@@ -1230,14 +1271,16 @@ class ScholarCache:
                 legacy call sites that have not been updated yet.
             synced: When True, marks ``synced_at=now``. Synced records never
                 TTL-expire. Live-fetched callers must leave this False.
+
+        A live write (``synced=False``) never replaces a synced row: sync owns
+        that row, and replacing it with a live copy dropped it from synced
+        search and put it under the TTL (#496). A sync write replaces anything.
         """
         db = _require_open(self._db)
         now = time.time()
         synced_at = now if synced else None
         await db.execute(
-            "INSERT OR REPLACE INTO standards "
-            "(identifier, data, cached_at, source, synced_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            _WRITE_STANDARD,
             (identifier, json.dumps(data), now, source, synced_at),
         )
         await db.commit()
@@ -1389,7 +1432,8 @@ class ScholarCache:
         Args:
             records: List of ``(identifier, StandardRecord)`` pairs.
             source: Standards body key (e.g. ``"ISO"``, ``"IEC"``).
-            synced: When True, marks ``synced_at=now`` on every row.
+            synced: When True, marks ``synced_at=now`` on every row. A live
+                batch leaves synced rows alone, as :meth:`set_standard` does.
         """
         if not records:
             return
@@ -1397,9 +1441,7 @@ class ScholarCache:
         now = time.time()
         synced_at = now if synced else None
         await db.executemany(
-            "INSERT OR REPLACE INTO standards "
-            "(identifier, data, cached_at, source, synced_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            _WRITE_STANDARD,
             (
                 (ident, json.dumps(data), now, source, synced_at)
                 for ident, data in records

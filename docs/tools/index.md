@@ -98,9 +98,11 @@ Fetch an author profile or search by name.
 - **Direct lookup** (numeric ID): author profile with paginated publications list
 - **Name search** (text): `{"candidates": [...]}` with up to 5 matching authors
 
-`limit` applies to cached and freshly fetched results alike. A cached author
-record holding fewer publications than `limit` is fetched again, unless it
-already holds every publication the author has.
+A direct lookup returns the publications from `offset` to `offset + limit`,
+with `next_offset` present when more follow. Semantic Scholar sends an
+author's whole publication list at once, so every page is cut from one cached
+record: later pages cost no further request. That list can be shorter than
+`paperCount`, so the last page may end before reaching that count.
 
 ---
 
@@ -464,7 +466,7 @@ Resolve up to 100 paper, patent, or book identifiers to full metadata in a singl
 
 **Returns:** JSON list of resolved items:
 
-- **Paper results** have a `"paper"` key. Papers not found in Semantic Scholar are automatically tried via OpenAlex (by DOI); results from OpenAlex include `"source": "openalex"`. When the citation string contains chapter patterns (such as "Chapter 3" or "pp. 45-67"), a `chapter_info` dict is attached with parsed chapter/page information.
+- **Paper results** have a `"paper"` key. Papers not found in Semantic Scholar are automatically tried via OpenAlex (by DOI); results from OpenAlex include `"source": "openalex"`. Their `paper` carries the same keys as a Semantic Scholar record for the requested `fields`, with `paperId` null (OpenAlex has no Semantic Scholar ID), `tldr` and `fieldsOfStudy` null, and `openAccessPdf` set only when OpenAlex has a direct PDF link. When the citation string contains chapter patterns (such as "Chapter 3" or "pp. 45-67"), a `chapter_info` dict is attached with parsed chapter/page information.
 - **Patent results** have a `"patent"` key and `"source_type": "patent"`. Patent numbers are auto-detected by their two-letter country prefix (such as `EP`, `US`, `WO`) and routed to the EPO OPS API.
 - **Book results** have a `"book"` key and `"source_type": "book"`. ISBNs (prefixed with `ISBN:`) are routed to Open Library.
 - **Unresolved items** have an `"error"` key.
@@ -567,7 +569,7 @@ Sections are fetched concurrently where possible (cache lookups run in parallel;
 }
 ```
 
-When `citations` is requested, non-patent literature (NPL) references are resolved against Semantic Scholar on a best-effort basis. References with a DOI are resolved with `"confidence": "high"`. References without a DOI or that fail to resolve have `"confidence": null`. When citation strings contain chapter patterns (such as "Ch. 5" or "pp. 112-130"), a `chapter_info` dict is included with parsed chapter and page information.
+When `citations` is requested, non-patent literature (NPL) references are resolved against Semantic Scholar on a best-effort basis. References with a DOI are resolved with `"confidence": "high"`. A DOI is recognised after `doi:`, `DOI`, or in a `doi.org` link, and one that does not resolve is still returned in `doi`. References without a DOI or that fail to resolve have `"confidence": null`. When citation strings contain chapter patterns (such as "Ch. 5" or "pp. 112-130"), a `chapter_info` dict is included with parsed chapter and page information.
 
 ---
 

@@ -328,7 +328,7 @@ async def test_repair_drops_nist_standards_cached_under_a_foreign_identity(tmp_p
     await old.close()
 
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("DELETE FROM repairs")
+        await db.execute("DELETE FROM repairs WHERE name LIKE '400_%'")
         await db.commit()
 
     upgraded = ScholarCache(db_path)
@@ -431,7 +431,7 @@ async def test_repair_moves_embedded_standard_text_out_of_the_record(tmp_path):
     await old.close()
 
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("DELETE FROM repairs")
+        await db.execute("DELETE FROM repairs WHERE name LIKE '479_%'")
         await db.commit()
 
     upgraded = ScholarCache(db_path)
@@ -453,6 +453,108 @@ async def test_repair_moves_embedded_standard_text_out_of_the_record(tmp_path):
         await upgraded.close()
 
 
+async def test_repair_forces_a_relaton_resync_and_drops_short_titles(tmp_path):
+    """#480: every Relaton title cached before the fix is replaced.
+
+    Synced rows are kept for the next sync to rewrite, and that sync must
+    reparse even when upstream has not moved. Live rows and cached search
+    results have no such rewrite coming, so they go.
+    """
+    import aiosqlite
+
+    db_path = tmp_path / "standards.db"
+    old = ScholarCache(db_path)
+    await old.open()
+    short = "Information security, cybersecurity and privacy protection"
+    for body in ("ISO", "IEEE", "CC"):
+        await old.set_sync_run(
+            body=body,
+            upstream_ref="abc123",
+            added=1,
+            updated=0,
+            unchanged=0,
+            withdrawn=0,
+            errors=[],
+            started_at=1.0,
+            finished_at=2.0,
+        )
+    await old.set_standard(
+        "ISO/IEC 27002:2022",
+        {"identifier": "ISO/IEC 27002:2022", "body": "ISO/IEC", "title": short},
+    )
+    await old.set_standard(
+        "ISO/IEC 27001:2022",
+        {"identifier": "ISO/IEC 27001:2022", "body": "ISO/IEC", "title": short},
+        source="ISO",
+        synced=True,
+    )
+    # A CC mirror of an ISO/IEC publication: synced by the CC loader, kept.
+    await old.set_standard(
+        "ISO/IEC 15408-1:2022",
+        {"identifier": "ISO/IEC 15408-1:2022", "body": "ISO/IEC", "title": "CC"},
+        source="CC",
+        synced=True,
+    )
+    # A live row from another body is not Relaton's and stays.
+    await old.set_standard(
+        "RFC 9000", {"identifier": "RFC 9000", "body": "IETF", "title": "QUIC"}
+    )
+    await old.set_standards_search("27001", [{"identifier": "x", "title": short}])
+    await old.close()
+
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("DELETE FROM repairs WHERE name LIKE '480_%'")
+        await db.commit()
+
+    upgraded = ScholarCache(db_path)
+    await upgraded.open()
+    try:
+        for body in ("ISO", "IEEE"):
+            run = await upgraded.get_sync_run(body)
+            assert run is not None
+            assert run["upstream_ref"] is None
+        cc_run = await upgraded.get_sync_run("CC")
+        assert cc_run is not None
+        assert cc_run["upstream_ref"] == "abc123"
+        assert await upgraded.get_standard("ISO/IEC 27002:2022") is None
+        assert await upgraded.get_standard("ISO/IEC 27001:2022") is not None
+        assert await upgraded.get_standard("ISO/IEC 15408-1:2022") is not None
+        assert await upgraded.get_standard("RFC 9000") is not None
+        assert await upgraded.get_standards_search("27001") is None
+    finally:
+        await upgraded.close()
+
+
+async def test_repair_resyncs_cc_rows_a_resolve_unsynced(tmp_path):
+    """#496: a CC row the resolve path rewrote as live is synced again."""
+    import aiosqlite
+
+    db_path = tmp_path / "standards.db"
+    old = ScholarCache(db_path)
+    await old.open()
+    await old.close()
+    # What the old resolve path left behind, written past the new guard.
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "INSERT INTO standards (identifier, data, cached_at, source, synced_at) "
+            "VALUES (?, ?, ?, NULL, NULL)",
+            (
+                "BSI-CC-PP-0099-2017",
+                '{"identifier": "BSI-CC-PP-0099-2017", "body": "CC"}',
+                1.0,
+            ),
+        )
+        await db.execute("DELETE FROM repairs WHERE name LIKE '496_%'")
+        await db.commit()
+
+    upgraded = ScholarCache(db_path)
+    await upgraded.open()
+    try:
+        assert await upgraded.list_synced_standard_ids("CC") == {"BSI-CC-PP-0099-2017"}
+    finally:
+        await upgraded.close()
+
+
 async def test_every_registered_repair_is_valid_sql(cache):
     """A malformed statement would otherwise only surface on a user's upgrade."""
     assert set(_REPAIRS) == {
@@ -470,6 +572,10 @@ async def test_every_registered_repair_is_valid_sql(cache):
         "479_move_standard_full_text",
         "479_resync_cc_rows",
         "479_strip_standard_full_text",
+        "480_resync_relaton_bodies",
+        "480_live_relaton_rows",
+        "480_standards_search_results",
+        "496_resync_cc_rows",
     }
     for statement in _REPAIRS.values():
         await cache._db.execute(f"EXPLAIN {statement}")
@@ -481,3 +587,53 @@ async def test_open_provisions_the_repairs_ledger(cache):
         "SELECT name FROM sqlite_master WHERE type='table' AND name='repairs'"
     ) as cur:
         assert await cur.fetchone() is not None
+
+
+async def test_a_live_write_never_replaces_a_synced_standard(cache):
+    """#496: sync owns a synced row; a live write leaves it as it is."""
+    synced = {"identifier": "ISO 9001:2015", "body": "ISO", "title": "QMS"}
+    await cache.set_standard("ISO 9001:2015", synced, source="ISO", synced=True)
+    await cache.set_standard(
+        "ISO 9001:2015", {"identifier": "ISO 9001:2015", "body": "ISO", "title": "x"}
+    )
+    assert await cache.list_synced_standard_ids("ISO") == {"ISO 9001:2015"}
+    assert await cache.get_standard("ISO 9001:2015") == synced
+
+
+async def test_live_and_sync_writes_still_replace_what_they_may(cache):
+    """A live row takes a newer live write, and a sync write replaces anything."""
+    await cache.set_standard("RFC 9000", {"identifier": "RFC 9000", "title": "a"})
+    await cache.set_standard("RFC 9000", {"identifier": "RFC 9000", "title": "b"})
+    row = await cache.get_standard("RFC 9000")
+    assert row is not None
+    assert row["title"] == "b"
+
+    await cache.set_standard(
+        "ISO 1:2022", {"identifier": "ISO 1:2022", "title": "live"}
+    )
+    await cache.set_standard(
+        "ISO 1:2022",
+        {"identifier": "ISO 1:2022", "title": "synced"},
+        source="ISO",
+        synced=True,
+    )
+    await cache.set_standard(
+        "ISO 1:2022",
+        {"identifier": "ISO 1:2022", "title": "resynced"},
+        source="ISO",
+        synced=True,
+    )
+    row = await cache.get_standard("ISO 1:2022")
+    assert row is not None
+    assert row["title"] == "resynced"
+    assert await cache.list_synced_standard_ids("ISO") == {"ISO 1:2022"}
+
+
+async def test_a_live_batch_never_replaces_a_synced_standard(cache):
+    """The batch writer follows the same rule as set_standard."""
+    synced = {"identifier": "ISO 9001:2015", "body": "ISO", "title": "QMS"}
+    await cache.set_standard("ISO 9001:2015", synced, source="ISO", synced=True)
+    await cache.set_standards_batch(
+        [("ISO 9001:2015", {"identifier": "ISO 9001:2015", "title": "x"})]
+    )
+    assert await cache.get_standard("ISO 9001:2015") == synced
